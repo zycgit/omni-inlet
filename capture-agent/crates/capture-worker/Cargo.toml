@@ -1,0 +1,33 @@
+[package]
+name = "capture-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+autobins = false
+
+[[bin]]
+name = "omni-inlet"
+path = "src/bin/omni-inlet.rs"
+
+[[bin]]
+name = "capture-agent"
+path = "src/bin/capture-agent.rs"
+
+[[bin]]
+name = "window-enumerator"
+path = "src/bin/window-enumerator.rs"
+
+[dependencies]
+anyhow.workspace = true
+capture-protocol = { path = "../capture-protocol" }
+clap.workspace = true
+ctrlc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb.workspace = true
+
+[dev-dependencies]
+tempfile = "3.20"
