@@ -163,16 +163,21 @@ pub fn start_capture(
     let event_title = request.title;
     let event_app = app.clone();
     std::thread::spawn(move || {
+        let stderr_reader = std::thread::spawn(move || {
+            BufReader::new(stderr)
+                .lines()
+                .map_while(Result::ok)
+                .collect::<Vec<_>>()
+                .join("\n")
+        });
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             let payload = serde_json::from_str::<serde_json::Value>(&line)
                 .unwrap_or_else(|_| serde_json::json!({ "event": "agent_log", "message": line }));
             let _ = event_app.emit("capture-event", payload);
         }
-        let error_text = BufReader::new(stderr)
-            .lines()
-            .map_while(Result::ok)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let error_text = stderr_reader
+            .join()
+            .unwrap_or_else(|_| "无法读取采集器错误输出".to_string());
         let status = handle.lock().ok().and_then(|mut child| child.wait().ok());
         let _ = event_app.emit(
             "capture-exited",

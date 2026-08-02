@@ -3,5 +3,7 @@ dist/
 capture-data/
 *.tmp
 node_modules/
+vcpkg_installed/
 launcher/dist/
 launcher/src-tauri/target/
+launcher/src-tauri/gen/

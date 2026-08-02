@@ -1,6 +1,5 @@
 use std::{
     ffi::OsString,
-    path::{Path, PathBuf},
     process::{Command, ExitStatus, Stdio},
 };
 
@@ -42,45 +41,31 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    let entry = std::env::current_exe().context("cannot locate omni-inlet executable")?;
-    let app_directory = entry
-        .parent()
-        .context("omni-inlet has no parent directory")?;
     match Cli::parse().command {
         CommandKind::Doctor => {
-            ensure_success(run_child(app_directory, "capture-agent", ["doctor"])?)?;
-            ensure_success(run_child(app_directory, "window-enumerator", ["doctor"])?)
+            ensure_success(run_child("capture-agent", ["doctor"])?)?;
+            ensure_success(run_child("window-enumerator", ["doctor"])?)?;
         }
         CommandKind::Capture { args } => {
             let mut child_args = vec![OsString::from("run")];
             child_args.extend(args);
-            ensure_success(run_child(app_directory, "capture-agent", child_args)?)
+            ensure_success(run_child("capture-agent", child_args)?)?;
         }
         CommandKind::Windows { args } => {
             let mut child_args = vec![OsString::from("snapshot")];
             child_args.extend(args);
-            ensure_success(run_child(app_directory, "window-enumerator", child_args)?)
+            ensure_success(run_child("window-enumerator", child_args)?)?;
         }
     }
+    Ok(())
 }
 
-fn run_child<I, S>(app_directory: &Path, name: &str, arguments: I) -> Result<ExitStatus>
+fn run_child<I, S>(name: &str, arguments: I) -> Result<ExitStatus>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    let executable_name = if cfg!(windows) {
-        format!("{name}.exe")
-    } else {
-        name.to_string()
-    };
-    let packaged = app_directory.join("bin").join(&executable_name);
-    let development = app_directory.join(&executable_name);
-    let executable: PathBuf = if packaged.is_file() {
-        packaged
-    } else {
-        development
-    };
+    let executable = capture_shells::sibling_executable(name)?;
     Command::new(&executable)
         .args(arguments)
         .stdin(Stdio::inherit())

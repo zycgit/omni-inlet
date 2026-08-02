@@ -1,0 +1,25 @@
+[package]
+name = "capture-shells"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+autobins = false
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+libloading.workspace = true
+
+[[bin]]
+name = "capture-agent"
+path = "src/bin/capture-agent.rs"
+
+[[bin]]
+name = "window-enumerator"
+path = "src/bin/window-enumerator.rs"
+
+[[bin]]
+name = "omni-inlet"
+path = "src/bin/omni-inlet.rs"

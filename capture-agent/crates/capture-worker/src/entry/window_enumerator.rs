@@ -36,17 +36,19 @@ enum SourceArg {
     TestPattern,
 }
 
-fn main() {
+pub fn entrypoint() -> i32 {
     if let Err(error) = run() {
         eprintln!("window-enumerator: {error:#}");
-        std::process::exit(1);
+        1
+    } else {
+        0
     }
 }
 
 fn run() -> Result<()> {
     match Cli::parse().command {
         Command::Doctor => {
-            let status = match capture_agent::platform::enumerate_windows(None) {
+            let status = match crate::platform::enumerate_windows(None) {
                 Ok(windows) => serde_json::json!({
                     "platform": std::env::consts::OS,
                     "native": {"available": true, "windowCount": windows.len()}
@@ -89,7 +91,7 @@ fn list(source: SourceArg, thumbnail_dir: Option<PathBuf>, json: bool) -> Result
                 value: "test-pattern".to_string(),
             },
         }],
-        SourceArg::Native => capture_agent::platform::enumerate_windows(thumbnail_dir.as_deref())?,
+        SourceArg::Native => crate::platform::enumerate_windows(thumbnail_dir.as_deref())?,
     };
     if json {
         println!("{}", serde_json::to_string_pretty(&sources)?);

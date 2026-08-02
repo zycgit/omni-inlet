@@ -7,12 +7,13 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail};
-use capture_agent::{
+use crate::{
+    ffmpeg::verify_video_runtime,
     runner::{CaptureOptions, SourceLostError, run_capture},
     source::CaptureSource,
     test_pattern::TestPatternSource,
 };
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
@@ -65,10 +66,10 @@ enum SourceArg {
     X11,
 }
 
-fn main() {
+pub fn entrypoint() -> i32 {
     if let Err(error) = run() {
         eprintln!("capture-agent: {error:#}");
-        let code = if error.downcast_ref::<SourceLostError>().is_some() {
+        if error.downcast_ref::<SourceLostError>().is_some() {
             20
         } else if error.to_string().contains("required")
             || error.to_string().contains("must be greater")
@@ -77,8 +78,9 @@ fn main() {
             2
         } else {
             70
-        };
-        std::process::exit(code);
+        }
+    } else {
+        0
     }
 }
 
@@ -118,7 +120,7 @@ fn run() -> Result<()> {
                         "--target-kind is required unless --source test-pattern is used",
                     )?;
                     let window_id = window_id.context("--window-id is required")?;
-                    capture_agent::platform::open_window_source(&target_kind, &window_id)?
+                    crate::platform::open_window_source(&target_kind, &window_id)?
                 }
             };
             let stop_requested = Arc::new(AtomicBool::new(false));
@@ -161,6 +163,7 @@ fn run() -> Result<()> {
 }
 
 fn doctor() -> Result<()> {
+    verify_video_runtime()?;
     let x11 = x11_status();
     println!(
         "{}",
@@ -171,9 +174,11 @@ fn doctor() -> Result<()> {
             "display": std::env::var("DISPLAY").ok(),
             "videoEncoding": {
                 "selfContained": true,
+                "runtime": "capture-runtime",
                 "container": "matroska",
                 "codec": "h264",
-                "encoder": "OpenH264"
+                "framework": "FFmpeg dynamic libraries",
+                "encoder": "libopenh264"
             },
             "backends": {
                 "testPattern": {"available": true},
@@ -190,7 +195,7 @@ fn doctor() -> Result<()> {
 
 #[cfg(target_os = "linux")]
 fn x11_source(window_id: &str) -> Result<Box<dyn CaptureSource>> {
-    use capture_agent::x11::{X11WindowSource, parse_window_id};
+    use crate::x11::{X11WindowSource, parse_window_id};
 
     Ok(Box::new(X11WindowSource::connect(parse_window_id(
         window_id,
@@ -204,7 +209,7 @@ fn x11_source(_window_id: &str) -> Result<Box<dyn CaptureSource>> {
 
 #[cfg(target_os = "linux")]
 fn x11_status() -> serde_json::Value {
-    match capture_agent::x11::list_windows() {
+    match crate::x11::list_windows() {
         Ok(windows) => serde_json::json!({"available": true, "windowCount": windows.len()}),
         Err(error) => serde_json::json!({"available": false, "error": error.to_string()}),
     }

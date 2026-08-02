@@ -492,8 +492,8 @@ OmniInlet/runtime/
     "container": "matroska",
     "fileExtension": "mkv",
     "codec": "h264",
-    "framework": "openh264-rs",
-    "encoder": "OpenH264",
+    "framework": "ffmpeg-dynamic",
+    "encoder": "libopenh264",
     "pixelFormat": "yuv420p",
     "rateControl": "cbr",
     "bitrateKbps": 2048,
@@ -634,11 +634,13 @@ dist/<version>/<target>/app/
 │   ├── capture-agent
 │   └── window-enumerator
 ├── lib/
+│   ├── capture-runtime.*      # 产品自有运行时：枚举、采集、任务与编码实现
+│   └── FFmpeg/OpenH264 动态库 # capture-runtime 的第三方运行依赖
 ├── resources/
 └── licenses/
 ```
 
-根目录只有一个用户入口；产品子程序只放在 `bin/`；运行依赖放在 `lib/`。`lib/` 内部是否二次分目录，由后续具体依赖决定。安装器、ZIP、DMG 和 AppImage 只能重新封装或复制这个 `app/`，不再发明第二套目录。
+根目录只有一个用户入口；`bin/` 只放可执行入口和薄启动壳；产品自有运行时与第三方动态运行库都放在 `lib/`。当前 `capture-agent` 和 `window-enumerator` 的实际功能统一进入 `capture-runtime`，壳程序按自身绝对位置加载它，不读取系统 `PATH`。`lib/` 内部是否二次分目录，由后续具体依赖决定。安装器、ZIP、DMG 和 AppImage 只能重新封装或复制这个 `app/`，不再发明第二套目录。
 
 `capture-agent/cargo xtask package` 只负责准备 `app/bin/` 下的三个捕获程序；产品级打包由 Tauri/Vue 引导器在根目录写入 GUI `omni-inlet`，再封装完整 `app/`。
 

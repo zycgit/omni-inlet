@@ -1,6 +1,6 @@
 # Capture Agent
 
-第一版被动窗口采集器。Rust 负责窗口取帧、job 生命周期和输出协议，并使用编译进二进制的 OpenH264 与纯 Rust Matroska 封装器生成 H.264/MKV 视频分片。
+第一版被动窗口采集器。Rust 负责窗口取帧、job 生命周期和输出协议，并通过 `app/lib` 内的 FFmpeg 动态库与 OpenH264 编码器生成 H.264/MKV 视频分片。
 
 当前已经实现：
 
@@ -24,7 +24,7 @@
 
 ## 环境
 
-开发构建只需要 Rust 稳定工具链和各平台 GUI/窗口 API 的构建环境。视频编码器已经静态编入采集器，目标电脑不需要安装 Python、GStreamer 或 FFmpeg。
+开发构建需要 Rust 稳定工具链、vcpkg 和各平台 GUI/窗口 API 的构建环境。`cargo xtask package` 会把产品采集实现编译为 `app/lib/capture-runtime`，并把它依赖的 FFmpeg/OpenH264 动态库收集到同一目录。`bin/capture-agent` 与 `bin/window-enumerator` 只是加载该运行时的启动壳。运行时只解析采集器自身相邻的 `../lib`，不会搜索系统 `PATH`；目标电脑不需要安装 Python、GStreamer 或 FFmpeg。
 
 检查环境：
 
@@ -32,7 +32,7 @@
 cargo xtask doctor
 ```
 
-X11 后端使用纯 Rust `x11rb`，不要求链接 `libX11` 开发包。OpenH264 从源码随 Rust 构建，Matroska 封装器为纯 Rust 依赖。
+X11 后端使用纯 Rust `x11rb`，不要求链接 `libX11` 开发包。FFmpeg 和 OpenH264 由固定 vcpkg manifest 构建为动态库，许可证文件随包放入 `app/licenses`。
 
 ## 统一入口
 
@@ -53,6 +53,8 @@ dist/{version}/{target}/
     │   ├── capture-agent
     │   └── window-enumerator
     ├── lib/
+    │   ├── capture-runtime.*
+    │   └── FFmpeg/OpenH264 动态库
     ├── resources/
     └── licenses/
 ```
@@ -66,7 +68,7 @@ dist/{version}/{target}/
 ```text
 ubuntu-latest   -> linux-x64
 windows-latest  -> windows-x64
-macos-latest    -> macos-arm64
+macos-26        -> macos-arm64
 ```
 
 每个平台都执行测试、生成同一结构的 `app/` 并压缩为 ZIP。三个 ZIP 会保留为 14 天的 Actions Artifacts；全部成功后，再上传到同一 GitHub Release。
@@ -74,8 +76,8 @@ macos-latest    -> macos-arm64
 发布标签必须与 Cargo 版本一致，例如当前版本使用：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 也可以在 GitHub Actions 页面手动运行 `Build portable apps`，并输入 `release_tag=v0.1.0`。同名 Release 已存在时会覆盖更新其中的三个 ZIP 附件。

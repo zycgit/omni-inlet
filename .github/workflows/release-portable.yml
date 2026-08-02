@@ -28,14 +28,20 @@ jobs:
             platform: linux
             arch: x64
             target: x86_64-unknown-linux-gnu
+            vcpkg_triplet: x64-linux-dynamic
+            executable_suffix: ''
           - runner: windows-latest
             platform: windows
             arch: x64
             target: x86_64-pc-windows-msvc
-          - runner: macos-15
+            vcpkg_triplet: x64-windows
+            executable_suffix: '.exe'
+          - runner: macos-26
             platform: macos
             arch: arm64
             target: aarch64-apple-darwin
+            vcpkg_triplet: arm64-osx-dynamic
+            executable_suffix: ''
 
     runs-on: ${{ matrix.runner }}
     defaults:
@@ -57,9 +63,11 @@ jobs:
             file \
             libayatana-appindicator3-dev \
             libdbus-1-dev \
+            libclang-dev \
             librsvg2-dev \
             libssl-dev \
             libwebkit2gtk-4.1-dev \
+            nasm \
             pkg-config \
             wget
 
@@ -73,20 +81,55 @@ jobs:
       - name: Select stable Rust
         run: rustup default stable
 
-      - name: Select macOS build toolchain
-        if: runner.os == 'macOS'
+      - name: Configure bundled native libraries
         shell: bash
         working-directory: .
         run: |
           set -euo pipefail
-          sudo xcode-select --switch /Applications/Xcode_16.4.app/Contents/Developer
-          xcodebuild -version
+          vcpkg_root="${VCPKG_INSTALLATION_ROOT:-/usr/local/share/vcpkg}"
+          command -v vcpkg >/dev/null
+          echo "VCPKG_ROOT=$vcpkg_root" >> "$GITHUB_ENV"
+          echo "OMNI_VCPKG_ROOT=$vcpkg_root" >> "$GITHUB_ENV"
+
+      - name: Build bundled FFmpeg libraries
+        shell: bash
+        working-directory: .
+        env:
+          VCPKG_TRIPLET: ${{ matrix.vcpkg_triplet }}
+        run: |
+          set -euo pipefail
+          vcpkg install \
+            --x-manifest-root="$GITHUB_WORKSPACE/capture-agent" \
+            --x-install-root="$OMNI_VCPKG_ROOT/installed" \
+            --triplet="$VCPKG_TRIPLET" \
+            --overlay-triplets="$GITHUB_WORKSPACE/capture-agent/vcpkg-triplets"
 
       - name: Test workspace
         run: cargo xtask test
 
       - name: Build portable app
         run: cargo xtask package --target current
+
+      - name: Test bundled FFmpeg libraries
+        shell: bash
+        working-directory: .
+        env:
+          TARGET: ${{ matrix.target }}
+          EXE_SUFFIX: ${{ matrix.executable_suffix }}
+        run: |
+          set -euo pipefail
+          app="capture-agent/dist/0.2.0/${TARGET}/app"
+          agent="$app/bin/capture-agent${EXE_SUFFIX}"
+          output="$PWD/capture-agent/target/ci-ffmpeg-test"
+          "$agent" doctor
+          "$agent" run \
+            --source test-pattern \
+            --segments 1 \
+            --segment-seconds 1 \
+            --fps 5 \
+            --job-id ci-ffmpeg-test \
+            --output "$output"
+          test -s "$output/videos/00000001.mkv"
 
       - name: Install launcher dependencies
         working-directory: launcher
@@ -131,6 +174,9 @@ jobs:
           cp "$portable/bin/omni-inlet" "$bundle/Contents/MacOS/bin/omni-inlet"
           cp "$portable/bin/capture-agent" "$bundle/Contents/MacOS/bin/capture-agent"
           cp "$portable/bin/window-enumerator" "$bundle/Contents/MacOS/bin/window-enumerator"
+          mkdir -p "$bundle/Contents/lib" "$bundle/Contents/licenses"
+          cp -R "$portable/lib/." "$bundle/Contents/lib/"
+          cp -R "$portable/licenses/." "$bundle/Contents/licenses/"
           mkdir -p "$bundle/Contents/Frameworks"
           xcrun swift-stdlib-tool --copy \
             --scan-executable "$bundle/Contents/MacOS/omni-inlet" \
@@ -140,6 +186,7 @@ jobs:
             --destination "$bundle/Contents/Frameworks" \
             --platform macosx
           find "$bundle/Contents/Frameworks" -type f -name '*.dylib' -exec codesign --force --sign - {} \;
+          find "$bundle/Contents/lib" -type f -name '*.dylib' -exec codesign --force --sign - {} \;
           codesign --force --sign - "$bundle/Contents/MacOS/bin/omni-inlet"
           codesign --force --sign - "$bundle/Contents/MacOS/bin/capture-agent"
           codesign --force --sign - "$bundle/Contents/MacOS/bin/window-enumerator"

@@ -1,0 +1,19 @@
+[package]
+name = "capture-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow.workspace = true
+capture-agent = { path = "../crates/capture-worker" }
+rusty_ffmpeg = { version = "0.17.0", features = [
+    "ffmpeg8_1",
+    "link_vcpkg_ffmpeg",
+    "use_prebuilt_binding",
+] }
