@@ -208,6 +208,7 @@ jobs:
             --scan-executable "$bundle/Contents/MacOS/bin/omni-inlet" \
             --scan-executable "$bundle/Contents/MacOS/bin/capture-agent" \
             --scan-executable "$bundle/Contents/MacOS/bin/window-enumerator" \
+            --scan-executable "$bundle/Contents/lib/libcapture_runtime.dylib" \
             --destination "$bundle/Contents/Frameworks" \
             --platform macosx
           find "$bundle/Contents/Frameworks" -type f -name '*.dylib' -exec codesign --force --sign - {} \;
@@ -217,6 +218,7 @@ jobs:
           codesign --force --sign - "$bundle/Contents/MacOS/bin/window-enumerator"
           codesign --force --sign - "$bundle"
           codesign --verify --deep --strict --verbose=2 "$bundle"
+          "$bundle/Contents/MacOS/bin/window-enumerator" doctor
           rm -rf "$portable/bin" "$portable/lib" "$portable/resources"
           cp -R "$bundle" "$portable/OmniInlet.app"
 
