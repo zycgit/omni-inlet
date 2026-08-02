@@ -1,5 +1,5 @@
 use std::{
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
     sync::{
@@ -526,7 +526,11 @@ fn replace_file(source: &Path, destination: &Path) -> Result<()> {
 }
 
 fn sync_file(path: &Path) -> Result<()> {
-    File::open(path)?.sync_all()?;
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)?
+        .sync_all()?;
     Ok(())
 }
 
