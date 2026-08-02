@@ -34,7 +34,7 @@ jobs:
             platform: windows
             arch: x64
             target: x86_64-pc-windows-msvc
-            vcpkg_triplet: x64-windows
+            vcpkg_triplet: x64-windows-dynamic
             executable_suffix: '.exe'
           - runner: macos-26
             platform: macos
@@ -116,6 +116,16 @@ jobs:
             --x-install-root="$OMNI_VCPKG_ROOT/installed" \
             --triplet="$VCPKG_TRIPLET" \
             --overlay-triplets="$GITHUB_WORKSPACE/capture-agent/vcpkg-triplets"
+
+      - name: Configure macOS Swift runtime
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: .
+        run: |
+          set -euo pipefail
+          swift_runtime="$(dirname "$(xcrun --find swift)")/../lib/swift/macosx"
+          test -f "$swift_runtime/libswift_Concurrency.dylib"
+          echo "DYLD_LIBRARY_PATH=$swift_runtime" >> "$GITHUB_ENV"
 
       - name: Test workspace
         run: cargo xtask test

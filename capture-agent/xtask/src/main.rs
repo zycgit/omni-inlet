@@ -320,7 +320,7 @@ fn ensure_directory(path: &Path, description: &str) -> Result<()> {
 
 fn vcpkg_triplet(target: &str) -> Result<&'static str> {
     match target {
-        "x86_64-pc-windows-msvc" => Ok("x64-windows"),
+        "x86_64-pc-windows-msvc" => Ok("x64-windows-dynamic"),
         "x86_64-unknown-linux-gnu" => Ok("x64-linux-dynamic"),
         "aarch64-apple-darwin" => Ok("arm64-osx-dynamic"),
         _ => bail!("no bundled FFmpeg vcpkg triplet is defined for {target}"),
