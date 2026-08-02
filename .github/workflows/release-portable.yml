@@ -86,10 +86,17 @@ jobs:
         working-directory: .
         run: |
           set -euo pipefail
-          vcpkg_root="${VCPKG_INSTALLATION_ROOT:-/usr/local/share/vcpkg}"
-          command -v vcpkg >/dev/null
+          vcpkg_root="$GITHUB_WORKSPACE/.ci-vcpkg"
+          git init "$vcpkg_root"
+          git -C "$vcpkg_root" remote add origin https://github.com/microsoft/vcpkg.git
           git -C "$vcpkg_root" fetch --depth=1 origin \
             39344dff01c5a5a0134caf2624cdd492f05d30ea
+          git -C "$vcpkg_root" checkout --detach FETCH_HEAD
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            "$vcpkg_root/bootstrap-vcpkg.bat" -disableMetrics
+          else
+            "$vcpkg_root/bootstrap-vcpkg.sh" -disableMetrics
+          fi
           echo "VCPKG_ROOT=$vcpkg_root" >> "$GITHUB_ENV"
           echo "OMNI_VCPKG_ROOT=$vcpkg_root" >> "$GITHUB_ENV"
 
@@ -100,7 +107,11 @@ jobs:
           VCPKG_TRIPLET: ${{ matrix.vcpkg_triplet }}
         run: |
           set -euo pipefail
-          vcpkg install \
+          vcpkg="$OMNI_VCPKG_ROOT/vcpkg"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            vcpkg="$OMNI_VCPKG_ROOT/vcpkg.exe"
+          fi
+          "$vcpkg" install \
             --x-manifest-root="$GITHUB_WORKSPACE/capture-agent" \
             --x-install-root="$OMNI_VCPKG_ROOT/installed" \
             --triplet="$VCPKG_TRIPLET" \
