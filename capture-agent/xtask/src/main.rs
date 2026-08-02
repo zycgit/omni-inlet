@@ -162,7 +162,23 @@ fn package(root: &Path, requested: TargetArg) -> Result<()> {
     let lib_directory = app_directory.join("lib");
     fs::create_dir_all(&lib_directory)?;
     fs::create_dir_all(app_directory.join("resources"))?;
-    fs::create_dir_all(app_directory.join("licenses"))?;
+    let licenses_directory = app_directory.join("licenses");
+    fs::create_dir_all(&licenses_directory)?;
+
+    let project_license = root
+        .parent()
+        .context("capture-agent workspace must be inside the repository")?
+        .join("LICENSE");
+    fs::copy(
+        &project_license,
+        licenses_directory.join("OmniInlet-Apache-2.0.txt"),
+    )
+    .with_context(|| {
+        format!(
+            "cannot package project license {}",
+            project_license.display()
+        )
+    })?;
 
     let extension = if target.contains("windows") {
         ".exe"
@@ -177,12 +193,7 @@ fn package(root: &Path, requested: TargetArg) -> Result<()> {
             &bin_directory,
         )?;
     }
-    copy_ffmpeg_runtime(
-        root,
-        &target,
-        &lib_directory,
-        &app_directory.join("licenses"),
-    )?;
+    copy_ffmpeg_runtime(root, &target, &lib_directory, &licenses_directory)?;
 
     println!("portable app created: {}", app_directory.display());
     Ok(())

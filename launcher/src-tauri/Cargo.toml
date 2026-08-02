@@ -3,6 +3,8 @@ name = "omni-inlet-launcher"
 version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
+license = "Apache-2.0"
+description = "OmniInlet desktop launcher"
 
 [lib]
 name = "omni_inlet_launcher"

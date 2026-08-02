@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file-set product-name="OmniInlet"
+                 product-version="${version}"
+                 file-version="${version}">
+      <include path="omni-inlet.exe" />
+      <include path="bin/omni-inlet.exe" />
+      <include path="bin/capture-agent.exe" />
+      <include path="bin/window-enumerator.exe" />
+      <include path="lib/capture_runtime.dll" />
+      <for-each>
+        <authenticode-sign description="OmniInlet" description-url="https://github.com/zycgit/omni-inlet" />
+      </for-each>
+    </pe-file-set>
+  </zip-file>
+</artifact-configuration>
