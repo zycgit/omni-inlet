@@ -1,6 +1,5 @@
 use std::{
     path::PathBuf,
-    process::Command as ProcessCommand,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -53,8 +52,6 @@ enum Command {
         /// Number of segments. Use 0 to continue until Ctrl+C.
         #[arg(long, default_value_t = 1)]
         segments: u64,
-        #[arg(long, default_value = "gst-launch-1.0")]
-        gstreamer_launch: String,
         #[arg(long, default_value_t = 1280)]
         test_width: u32,
         #[arg(long, default_value_t = 720)]
@@ -98,7 +95,6 @@ fn run() -> Result<()> {
             fps,
             video_bitrate_kbps,
             segments,
-            gstreamer_launch,
             test_width,
             test_height,
         } => {
@@ -147,7 +143,6 @@ fn run() -> Result<()> {
                     fps,
                     video_bitrate_kbps,
                     max_segments: (segments != 0).then_some(segments),
-                    gstreamer_launch: gstreamer_launch.into(),
                     stop_requested,
                 },
             )?;
@@ -167,20 +162,6 @@ fn run() -> Result<()> {
 
 fn doctor() -> Result<()> {
     let x11 = x11_status();
-    let gstreamer = match ProcessCommand::new("gst-launch-1.0")
-        .arg("--version")
-        .output()
-    {
-        Ok(output) if output.status.success() => serde_json::json!({
-            "available": true,
-            "version": String::from_utf8_lossy(&output.stdout).lines().next(),
-        }),
-        Ok(output) => serde_json::json!({
-            "available": false,
-            "error": format!("gst-launch-1.0 exited with {}", output.status),
-        }),
-        Err(error) => serde_json::json!({"available": false, "error": error.to_string()}),
-    };
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
@@ -189,10 +170,10 @@ fn doctor() -> Result<()> {
             "sessionType": std::env::var("XDG_SESSION_TYPE").ok(),
             "display": std::env::var("DISPLAY").ok(),
             "videoEncoding": {
-                "gstreamer": gstreamer,
+                "selfContained": true,
                 "container": "matroska",
                 "codec": "h264",
-                "encoder": "x264enc"
+                "encoder": "OpenH264"
             },
             "backends": {
                 "testPattern": {"available": true},

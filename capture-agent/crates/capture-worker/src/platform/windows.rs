@@ -6,6 +6,7 @@ use capture_protocol::{
 };
 use windows::Win32::{
     Foundation::{CloseHandle, HWND, LPARAM, RECT},
+    Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
     Graphics::Gdi::{
         BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS,
         DeleteDC, DeleteObject, HGDIOBJ, SelectObject,
@@ -56,7 +57,7 @@ pub fn enumerate_windows(thumbnail_directory: Option<&Path>) -> Result<Vec<Windo
         let Some((width, height)) = window_size(hwnd) else {
             continue;
         };
-        let visible = unsafe { IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() };
+        let visible = is_window_presented(hwnd);
         let application_name = process_name(process_id).unwrap_or_else(|| "Windows 应用".into());
         let value = format!("0x{:X}", hwnd.0 as usize);
         let target = NativeTarget {
@@ -132,7 +133,7 @@ impl WindowsWindowSource {
                 title: window_title(hwnd),
                 width,
                 height,
-                visible: unsafe { IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() },
+                visible: is_window_presented(hwnd),
             },
         })
     }
@@ -158,13 +159,29 @@ impl CaptureSource for WindowsWindowSource {
         unsafe {
             if !IsWindow(Some(self.hwnd)).as_bool() {
                 Ok(SourceState::Destroyed)
-            } else if !IsWindowVisible(self.hwnd).as_bool() || IsIconic(self.hwnd).as_bool() {
+            } else if !is_window_presented(self.hwnd) {
                 Ok(SourceState::Hidden)
             } else {
                 Ok(SourceState::Available)
             }
         }
     }
+}
+
+fn is_window_presented(hwnd: HWND) -> bool {
+    if unsafe { !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() } {
+        return false;
+    }
+    let mut cloaked = 0_u32;
+    let result = unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED,
+            (&mut cloaked as *mut u32).cast(),
+            size_of::<u32>() as u32,
+        )
+    };
+    result.is_err() || cloaked == 0
 }
 
 fn window_title(hwnd: HWND) -> String {

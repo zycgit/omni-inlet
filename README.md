@@ -18,7 +18,7 @@ OmniInlet（全域消息汇流平台）把来自不同聊天渠道的消息和�
 - `window-enumerator`：枚举应用窗口并生成窗口快照信息。
 - `cargo xtask`：测试、构建和绿色目录打包的统一开发入口。
 
-当前阶段仍是开发预览版。Linux 已有 X11 窗口捕捉实现；Windows 和 macOS 已建立可编译的平台边界，原生窗口捕捉后端仍需继续实现。
+当前阶段仍是开发预览版。Linux X11、Windows 和 macOS 均已实现原生窗口枚举与捕捉；视频编码使用随二进制编译的 OpenH264，不要求目标电脑额外安装编码器。Windows WGC、macOS SCStream 与 Linux Wayland 后端仍需继续完善。
 
 ## 本地验证
 

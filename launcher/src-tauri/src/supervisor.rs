@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
@@ -34,18 +34,25 @@ pub struct StartCaptureRequest {
 }
 
 #[tauri::command]
-pub fn enumerate_windows(app: AppHandle) -> Result<Vec<WindowCandidate>, String> {
+pub async fn enumerate_windows(app: AppHandle) -> Result<Vec<WindowCandidate>, String> {
     ensure_capture_permission()?;
-    let executable = resolve_program(&app, "window-enumerator")?;
+    tauri::async_runtime::spawn_blocking(move || enumerate_windows_blocking(&app))
+        .await
+        .map_err(error_string)?
+}
+
+fn enumerate_windows_blocking(app: &AppHandle) -> Result<Vec<WindowCandidate>, String> {
+    let executable = resolve_program(app, "window-enumerator")?;
     let thumbnail_directory = runtime_directory()
         .map_err(error_string)?
         .join("thumbnails");
     std::fs::create_dir_all(&thumbnail_directory).map_err(error_string)?;
-    let output = Command::new(&executable)
+    let mut command = Command::new(&executable);
+    command
         .args(["snapshot", "--json", "--thumbnail-dir"])
-        .arg(&thumbnail_directory)
-        .output()
-        .map_err(error_string)?;
+        .arg(&thumbnail_directory);
+    configure_background_process(&mut command);
+    let output = command.output().map_err(error_string)?;
     if !output.status.success() {
         return Err(format!(
             "{} exited with {}: {}",
@@ -54,7 +61,17 @@ pub fn enumerate_windows(app: AppHandle) -> Result<Vec<WindowCandidate>, String>
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    serde_json::from_slice(&output.stdout).map_err(error_string)
+    let mut candidates: Vec<WindowCandidate> =
+        serde_json::from_slice(&output.stdout).map_err(error_string)?;
+    let active_targets: HashSet<String> = active_agent_leases(unix_ms())
+        .map_err(error_string)?
+        .into_iter()
+        .map(|lease| lease.target_key)
+        .collect();
+    candidates.retain(|candidate| {
+        candidate.visible || active_targets.contains(&candidate.native_target.key())
+    });
+    Ok(candidates)
 }
 
 #[tauri::command]
@@ -100,7 +117,8 @@ pub fn start_capture(
     std::fs::create_dir_all(&output_directory).map_err(error_string)?;
 
     let executable = resolve_program(&app, "capture-agent")?;
-    let mut child = Command::new(&executable)
+    let mut command = Command::new(&executable);
+    command
         .args([
             "run",
             "--target-kind",
@@ -123,9 +141,9 @@ pub fn start_capture(
             "0",
         ])
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(error_string)?;
+        .stderr(Stdio::piped());
+    configure_background_process(&mut command);
+    let mut child = command.spawn().map_err(error_string)?;
     let stdout = child
         .stdout
         .take()
@@ -251,6 +269,18 @@ fn unix_ms() -> u64 {
 
 fn error_string(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+fn configure_background_process(command: &mut Command) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = command;
 }
 
 fn ensure_capture_permission() -> Result<(), String> {

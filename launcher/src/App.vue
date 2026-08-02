@@ -2,12 +2,14 @@
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useWindowsStore } from "./stores/windows";
 
 const store = useWindowsStore();
 const permission = ref({ required: false, granted: true, settingsLabel: "" });
 const permissionRequested = ref(false);
 let leaseTimer: number | undefined;
+let eventUnlisteners: UnlistenFn[] = [];
 
 async function chooseOutput(): Promise<void> {
   const selected = await open({ directory: true, multiple: false, defaultPath: store.outputRoot });
@@ -15,6 +17,15 @@ async function chooseOutput(): Promise<void> {
 }
 
 onMounted(async () => {
+  eventUnlisteners = [
+    await listen("capture-event", () => {
+      void store.refreshLeases();
+    }),
+    await listen("capture-exited", (event) => {
+      store.reportCaptureExit(event.payload as { windowTitle?: string; exitCode?: number; error?: string });
+      void store.refreshLeases();
+    }),
+  ];
   permission.value = await invoke("capture_permission_status");
   await store.loadDefaultOutput();
   if (permission.value.granted) await store.refresh();
@@ -28,7 +39,10 @@ async function requestPermission(): Promise<void> {
   if (granted) await store.refresh();
 }
 
-onBeforeUnmount(() => window.clearInterval(leaseTimer));
+onBeforeUnmount(() => {
+  window.clearInterval(leaseTimer);
+  for (const unlisten of eventUnlisteners) unlisten();
+});
 </script>
 
 <template>
@@ -158,8 +172,8 @@ onBeforeUnmount(() => window.clearInterval(leaseTimer));
           <span>{{ store.outputRoot }}</span><b>浏览</b>
         </button>
       </div>
-      <button class="primary" :disabled="!store.selected || !store.outputRoot" @click="store.startSelected">
-        <span>●</span> 开始采集
+      <button class="primary" :disabled="!store.selected?.capturable || !store.outputRoot || store.starting" @click="store.startSelected">
+        <span>●</span> {{ store.starting ? "正在启动" : "开始采集" }}
       </button>
     </footer>
   </div>

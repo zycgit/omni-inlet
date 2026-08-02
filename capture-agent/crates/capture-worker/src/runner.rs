@@ -1,9 +1,7 @@
 use std::{
-    ffi::OsString,
     fs::{self, File},
-    io::{BufWriter, Read, Write},
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, Command, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -12,11 +10,20 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use capture_protocol::{
     AgentState, CaptureConfiguration, CaptureEvent, CaptureJobEvents, CaptureJobMeta, NativeTarget,
     PROTOCOL_VERSION, VideoEncodingConfiguration,
 };
+use openh264::{
+    OpenH264API,
+    encoder::{
+        BitRate, Complexity, Encoder, EncoderConfig, FrameRate, FrameType, IntraFramePeriod,
+        RateControlMode, UsageType,
+    },
+    formats::{RgbaSliceU8, YUVBuffer},
+};
+use oxideav_core::{CodecId, CodecParameters, Muxer, Packet, StreamInfo, TimeBase, WriteSeek};
 
 use crate::{
     registry::LeaseGuard,
@@ -35,7 +42,6 @@ pub struct CaptureOptions {
     pub fps: u32,
     pub video_bitrate_kbps: u32,
     pub max_segments: Option<u64>,
-    pub gstreamer_launch: OsString,
     pub stop_requested: Arc<AtomicBool>,
 }
 
@@ -61,8 +67,6 @@ pub fn run_capture(
     options: &CaptureOptions,
 ) -> Result<CaptureSummary> {
     validate_options(options)?;
-    verify_gstreamer(&options.gstreamer_launch)?;
-
     fs::create_dir_all(&options.output_directory)?;
     let videos_directory = options.output_directory.join(VIDEOS_DIRECTORY);
     fs::create_dir_all(&videos_directory)?;
@@ -105,13 +109,13 @@ pub fn run_capture(
             container: "matroska".to_string(),
             file_extension: "mkv".to_string(),
             codec: "h264".to_string(),
-            framework: "gstreamer".to_string(),
-            encoder: "x264enc".to_string(),
+            framework: "openh264-rs".to_string(),
+            encoder: "OpenH264".to_string(),
             pixel_format: "yuv420p".to_string(),
             rate_control: "cbr".to_string(),
             bitrate_kbps: options.video_bitrate_kbps,
-            speed_preset: "veryfast".to_string(),
-            tune: "zerolatency".to_string(),
+            speed_preset: "low-complexity".to_string(),
+            tune: "screen-content".to_string(),
             audio: false,
             encoded_width,
             encoded_height,
@@ -186,7 +190,6 @@ pub fn run_capture(
         );
 
         let mut encoder = SegmentEncoder::start(
-            &options.gstreamer_launch,
             &temporary_path,
             source_info.width,
             source_info.height,
@@ -485,50 +488,6 @@ fn next_segment_sequence(videos_directory: &Path) -> Result<u64> {
     Ok(maximum + 1)
 }
 
-fn verify_gstreamer(program: &OsString) -> Result<()> {
-    let output = Command::new(program)
-        .arg("--version")
-        .output()
-        .with_context(|| format!("cannot start {}", PathBuf::from(program).display()))?;
-    ensure!(
-        output.status.success(),
-        "GStreamer launcher exited with {}",
-        output.status
-    );
-    let launch_path = PathBuf::from(program);
-    let launch_name = launch_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .context("GStreamer launcher path has no valid file name")?;
-    let inspect_name = launch_name.replacen("gst-launch", "gst-inspect", 1);
-    ensure!(
-        inspect_name != launch_name,
-        "cannot derive gst-inspect command from {launch_name}"
-    );
-    let inspect_program = launch_path.with_file_name(inspect_name);
-    for element in [
-        "fdsrc",
-        "rawvideoparse",
-        "videoconvert",
-        "videobox",
-        "x264enc",
-        "matroskamux",
-        "filesink",
-    ] {
-        let status = Command::new(&inspect_program)
-            .arg(element)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .with_context(|| format!("cannot start {}", inspect_program.display()))?;
-        ensure!(
-            status.success(),
-            "required GStreamer element is missing: {element}"
-        );
-    }
-    Ok(())
-}
-
 fn even_dimension(value: u32) -> Result<u32> {
     ensure!(value > 0, "capture dimension must be greater than zero");
     value
@@ -537,13 +496,20 @@ fn even_dimension(value: u32) -> Result<u32> {
 }
 
 struct SegmentEncoder {
-    child: Child,
-    stdin: Option<BufWriter<ChildStdin>>,
+    encoder: Encoder,
+    muxer: Option<Box<dyn Muxer>>,
+    output: PathBuf,
+    width: u32,
+    height: u32,
+    encoded_width: u32,
+    encoded_height: u32,
+    fps: u32,
+    bitrate_bps: u32,
+    frame_index: i64,
 }
 
 impl SegmentEncoder {
     fn start(
-        program: &OsString,
         output: &Path,
         width: u32,
         height: u32,
@@ -551,91 +517,146 @@ impl SegmentEncoder {
         key_frame_interval_frames: u32,
         video_bitrate_kbps: u32,
     ) -> Result<Self> {
-        let block_size = width as u64 * height as u64 * 4;
         let encoded_width = even_dimension(width)?;
         let encoded_height = even_dimension(height)?;
-        let right_padding = encoded_width - width;
-        let bottom_padding = encoded_height - height;
-        let mut child = Command::new(program)
-            .args(["-q", "fdsrc", "fd=0"])
-            .arg(format!("blocksize={block_size}"))
-            .args(["!", "rawvideoparse", "format=rgba"])
-            .arg(format!("width={width}"))
-            .arg(format!("height={height}"))
-            .arg(format!("framerate={fps}/1"))
-            .args(["!", "videoconvert", "!", "videobox"])
-            .arg(format!("right=-{right_padding}"))
-            .arg(format!("bottom=-{bottom_padding}"))
-            .arg("!")
-            .arg(format!(
-                "video/x-raw,format=I420,width={encoded_width},height={encoded_height}"
-            ))
-            .args(["!", "x264enc", "tune=zerolatency", "speed-preset=veryfast"])
-            .arg(format!("key-int-max={key_frame_interval_frames}"))
-            .arg(format!("bitrate={video_bitrate_kbps}"))
-            .args(["!", "matroskamux", "!", "filesink"])
-            .arg(format!("location={}", output.display()))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .context("cannot start GStreamer video encoder")?;
-        let stdin = child
-            .stdin
-            .take()
-            .context("GStreamer stdin is unavailable")?;
+        let bitrate_bps = video_bitrate_kbps.saturating_mul(1_000);
+        let config = EncoderConfig::new()
+            .usage_type(UsageType::ScreenContentRealTime)
+            .rate_control_mode(RateControlMode::Bitrate)
+            .bitrate(BitRate::from_bps(bitrate_bps))
+            .max_frame_rate(FrameRate::from_hz(fps as f32))
+            .intra_frame_period(IntraFramePeriod::from_num_frames(key_frame_interval_frames))
+            .complexity(Complexity::Low)
+            .adaptive_quantization(false)
+            .background_detection(false)
+            .skip_frames(true);
+        let encoder = Encoder::with_api_config(OpenH264API::from_source(), config)
+            .map_err(|error| anyhow::anyhow!("cannot initialize OpenH264: {error}"))?;
         Ok(Self {
-            child,
-            stdin: Some(BufWriter::new(stdin)),
+            encoder,
+            muxer: None,
+            output: output.to_path_buf(),
+            width,
+            height,
+            encoded_width,
+            encoded_height,
+            fps,
+            bitrate_bps,
+            frame_index: 0,
         })
     }
 
     fn write_frame(&mut self, frame: &CapturedFrame) -> Result<()> {
-        self.stdin
-            .as_mut()
-            .context("video encoder is already closed")?
-            .write_all(&frame.rgba)
-            .context("cannot send frame to GStreamer")
-    }
+        ensure!(
+            frame.width == self.width && frame.height == self.height,
+            "captured frame dimensions changed during a video segment"
+        );
+        let padded = pad_rgba(
+            &frame.rgba,
+            self.width,
+            self.height,
+            self.encoded_width,
+            self.encoded_height,
+        )?;
+        let rgba = RgbaSliceU8::new(
+            &padded,
+            (self.encoded_width as usize, self.encoded_height as usize),
+        );
+        let yuv = YUVBuffer::from_rgb_source(rgba);
+        let encoded = self
+            .encoder
+            .encode(&yuv)
+            .map_err(|error| anyhow::anyhow!("OpenH264 failed to encode a frame: {error}"))?;
+        if encoded.frame_type() == FrameType::Skip {
+            self.frame_index += 1;
+            return Ok(());
+        }
+        let keyframe = matches!(encoded.frame_type(), FrameType::IDR | FrameType::I);
+        let repacked = oxideav_mkv::avc::annexb_to_avcc(&encoded.to_vec());
+        ensure!(
+            !repacked.packetized.is_empty(),
+            "OpenH264 produced an empty video packet"
+        );
 
-    fn finish(mut self) -> Result<()> {
-        if let Some(mut stdin) = self.stdin.take() {
-            stdin.flush()?;
-            drop(stdin);
-        }
-        let status = self.child.wait()?;
-        let mut stderr = String::new();
-        if let Some(mut pipe) = self.child.stderr.take() {
-            pipe.read_to_string(&mut stderr)?;
-        }
-        if !status.success() {
-            bail!(
-                "GStreamer encoder failed with {}: {}",
-                status,
-                stderr.trim()
+        if self.muxer.is_none() {
+            ensure!(
+                !repacked.config_record.is_empty(),
+                "OpenH264 did not provide SPS/PPS for the first frame"
             );
+            let mut parameters = CodecParameters::video(CodecId::new("h264"));
+            parameters.width = Some(self.encoded_width);
+            parameters.height = Some(self.encoded_height);
+            parameters.extradata = repacked.config_record;
+            parameters.bit_rate = Some(u64::from(self.bitrate_bps));
+            let stream = StreamInfo {
+                index: 0,
+                time_base: TimeBase::from_rate(self.fps),
+                duration: None,
+                start_time: Some(0),
+                params: parameters,
+            };
+            let output: Box<dyn WriteSeek> = Box::new(File::create(&self.output)?);
+            let mut muxer = oxideav_mkv::mux::open(output, &[stream])?;
+            muxer.write_header()?;
+            self.muxer = Some(muxer);
         }
+
+        let packet = Packet::new(0, TimeBase::from_rate(self.fps), repacked.packetized)
+            .with_pts(self.frame_index)
+            .with_dts(self.frame_index)
+            .with_duration(1)
+            .with_keyframe(keyframe);
+        self.muxer
+            .as_mut()
+            .context("Matroska muxer is not initialized")?
+            .write_packet(&packet)?;
+        self.frame_index += 1;
         Ok(())
     }
 
-    fn abort(mut self) -> Result<()> {
-        self.stdin.take();
-        if self.child.try_wait()?.is_none() {
-            self.child.kill()?;
-        }
-        self.child.wait()?;
+    fn finish(mut self) -> Result<()> {
+        self.muxer
+            .take()
+            .context("cannot finish an empty video segment")?
+            .write_trailer()?;
+        Ok(())
+    }
+
+    fn abort(self) -> Result<()> {
         Ok(())
     }
 }
 
-impl Drop for SegmentEncoder {
-    fn drop(&mut self) {
-        self.stdin.take();
-        if self.child.try_wait().ok().flatten().is_none() {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+fn pad_rgba(
+    source: &[u8],
+    width: u32,
+    height: u32,
+    encoded_width: u32,
+    encoded_height: u32,
+) -> Result<Vec<u8>> {
+    let source_stride = width as usize * 4;
+    let target_stride = encoded_width as usize * 4;
+    ensure!(
+        source.len() == source_stride * height as usize,
+        "invalid RGBA buffer length"
+    );
+    let mut target = vec![0_u8; target_stride * encoded_height as usize];
+    for row in 0..height as usize {
+        let source_start = row * source_stride;
+        let target_start = row * target_stride;
+        target[target_start..target_start + source_stride]
+            .copy_from_slice(&source[source_start..source_start + source_stride]);
+        if encoded_width > width {
+            let last = target_start + source_stride - 4;
+            target.copy_within(last..last + 4, target_start + source_stride);
         }
     }
+    if encoded_height > height {
+        let last_row = (height as usize - 1) * target_stride;
+        let target_row = height as usize * target_stride;
+        target.copy_within(last_row..last_row + target_stride, target_row);
+    }
+    Ok(target)
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
@@ -683,13 +704,10 @@ mod tests {
 
     use super::*;
     use crate::test_pattern::TestPatternSource;
+    use oxideav_core::{Error as MediaError, NullCodecResolver, ReadSeek};
 
     #[test]
     fn commits_mkv_segments_and_json_documents() {
-        if verify_gstreamer(&"gst-launch-1.0".into()).is_err() {
-            return;
-        }
-
         let directory = tempdir().unwrap();
         let job_directory = directory.path().join("job-test");
         let mut source = TestPatternSource::new(81, 45);
@@ -702,7 +720,6 @@ mod tests {
                 fps: 20,
                 video_bitrate_kbps: 2048,
                 max_segments: Some(2),
-                gstreamer_launch: "gst-launch-1.0".into(),
                 stop_requested: Arc::new(AtomicBool::new(false)),
             },
         )
@@ -714,8 +731,24 @@ mod tests {
         assert!(job_directory.join(META_FILE).is_file());
         assert!(job_directory.join(EVENTS_FILE).is_file());
         for sequence in 1..=2 {
-            let video = fs::read(job_directory.join(format!("videos/{sequence:08}.mkv"))).unwrap();
+            let path = job_directory.join(format!("videos/{sequence:08}.mkv"));
+            let video = fs::read(&path).unwrap();
             assert!(video.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]));
+            let input: Box<dyn ReadSeek> = Box::new(File::open(path).unwrap());
+            let mut demuxer = oxideav_mkv::demux::open(input, &NullCodecResolver).unwrap();
+            assert_eq!(demuxer.streams()[0].params.codec_id.as_str(), "h264");
+            let mut packets = 0;
+            loop {
+                match demuxer.next_packet() {
+                    Ok(packet) => {
+                        assert!(!packet.data.is_empty());
+                        packets += 1;
+                    }
+                    Err(MediaError::Eof) => break,
+                    Err(error) => panic!("cannot read generated MKV: {error}"),
+                }
+            }
+            assert!(packets > 0);
         }
 
         let meta: CaptureJobMeta = read_json(&job_directory.join(META_FILE)).unwrap();
@@ -743,7 +776,6 @@ mod tests {
                 fps: 20,
                 video_bitrate_kbps: 2048,
                 max_segments: Some(1),
-                gstreamer_launch: "gst-launch-1.0".into(),
                 stop_requested: Arc::new(AtomicBool::new(false)),
             },
         )

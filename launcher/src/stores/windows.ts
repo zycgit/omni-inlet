@@ -11,6 +11,7 @@ export const useWindowsStore = defineStore("windows", () => {
   const selectedId = ref<string>();
   const collapsedGroups = ref(new Set<string>());
   const loading = ref(false);
+  const starting = ref(false);
   const error = ref("");
   const outputRoot = ref("");
 
@@ -65,7 +66,10 @@ export const useWindowsStore = defineStore("windows", () => {
     try {
       windows.value = await invoke<WindowCandidate[]>("enumerate_windows");
       await refreshLeases();
-      if (selectedId.value && !windows.value.some((item) => item.candidateId === selectedId.value)) {
+      if (
+        selectedId.value &&
+        !windows.value.some((item) => item.candidateId === selectedId.value && item.capturable)
+      ) {
         selectedId.value = undefined;
       }
     } catch (reason) {
@@ -84,8 +88,9 @@ export const useWindowsStore = defineStore("windows", () => {
   }
 
   async function startSelected(): Promise<void> {
-    if (!selected.value) return;
+    if (!selected.value?.capturable || starting.value) return;
     error.value = "";
+    starting.value = true;
     try {
       await invoke("start_capture", {
         request: {
@@ -103,7 +108,15 @@ export const useWindowsStore = defineStore("windows", () => {
       }
     } catch (reason) {
       error.value = String(reason);
+    } finally {
+      starting.value = false;
     }
+  }
+
+  function reportCaptureExit(payload: { windowTitle?: string; exitCode?: number; error?: string }): void {
+    if (payload.exitCode === 0 || payload.exitCode === 20) return;
+    const detail = payload.error?.trim() || `采集器异常退出，退出码 ${payload.exitCode ?? "未知"}`;
+    error.value = `${payload.windowTitle ? `“${payload.windowTitle}”：` : ""}${detail}`;
   }
 
   function toggleGroup(groupId: string): void {
@@ -125,9 +138,9 @@ export const useWindowsStore = defineStore("windows", () => {
   }
 
   return {
-    windows, leases, search, filter, selectedId, loading, error, outputRoot,
+    windows, leases, search, filter, selectedId, loading, starting, error, outputRoot,
     groups, selected, captureWindowCount, filtered,
     countFor, thumbnailUrl, refresh, refreshLeases, loadDefaultOutput, startSelected,
-    toggleGroup, collapseAll, expandAll, isCollapsed,
+    toggleGroup, collapseAll, expandAll, isCollapsed, reportCaptureExit,
   };
 });

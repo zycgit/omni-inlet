@@ -1,11 +1,11 @@
 # Capture Agent
 
-第一版被动窗口采集器。Rust 负责窗口取帧、job 生命周期和输出协议，GStreamer 负责把 RGBA 画面编码成 H.264/MKV 视频分片。
+第一版被动窗口采集器。Rust 负责窗口取帧、job 生命周期和输出协议，并使用编译进二进制的 OpenH264 与纯 Rust Matroska 封装器生成 H.264/MKV 视频分片。
 
 当前已经实现：
 
 - `test-pattern`：在无图形环境中验证完整视频链路；
-- `x11`：枚举并被动捕捉 Linux X11 窗口；
+- Linux X11、Windows 和 macOS 原生窗口枚举与被动捕捉；
 - 默认 10 FPS、每 5 秒一个 MKV 分片；
 - job 目录中的 `meta.json`、`events.json` 和 `videos/`；
 - 同一个 job 重新启动后从下一个视频序号继续，不覆盖旧分片；
@@ -13,38 +13,26 @@
 
 ## 当前边界
 
-版本 `0.1.0` 是可运行的 Linux/X11 第一版，还没有实现：
+版本 `0.2.0` 是跨平台开发预览版，还没有实现：
 
 - Linux Wayland Portal + PipeWire；
-- Windows Graphics Capture；
-- macOS ScreenCaptureKit；
-- Tauri + Vue 3 引导器；
+- Windows Graphics Capture 流式后端（当前使用 `PrintWindow`）；
+- macOS ScreenCaptureKit 流式后端（当前使用窗口截图接口）；
 - 后续长图、OCR 和消息事件处理器。
 
 采集器不持久化 PNG 帧。帧仅作为内存中的编码输入，落盘原始数据是 MKV 视频。
 
 ## 环境
 
-需要 Rust 稳定工具链和 GStreamer 1.x。GStreamer 至少需要以下元素：
-
-```text
-fdsrc
-rawvideoparse
-videoconvert
-x264enc
-matroskamux
-filesink
-```
+开发构建只需要 Rust 稳定工具链和各平台 GUI/窗口 API 的构建环境。视频编码器已经静态编入采集器，目标电脑不需要安装 Python、GStreamer 或 FFmpeg。
 
 检查环境：
 
 ```bash
 cargo xtask doctor
-gst-inspect-1.0 x264enc
-gst-inspect-1.0 matroskamux
 ```
 
-X11 后端使用纯 Rust `x11rb`，不要求链接 `libX11` 开发包。当前发布目录尚未携带 GStreamer 运行时，目标电脑必须先安装对应运行时和插件。
+X11 后端使用纯 Rust `x11rb`，不要求链接 `libX11` 开发包。OpenH264 从源码随 Rust 构建，Matroska 封装器为纯 Rust 依赖。
 
 ## 统一入口
 
