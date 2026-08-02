@@ -73,6 +73,16 @@ jobs:
       - name: Select stable Rust
         run: rustup default stable
 
+      - name: Configure macOS Swift runtime
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: .
+        run: |
+          set -euo pipefail
+          swift_bin="$(xcrun --find swift)"
+          swift_lib="$(cd "$(dirname "$swift_bin")/../lib/swift/macosx" && pwd)"
+          echo "DYLD_FALLBACK_LIBRARY_PATH=$swift_lib" >> "$GITHUB_ENV"
+
       - name: Test workspace
         run: cargo xtask test
 
@@ -122,10 +132,20 @@ jobs:
           cp "$portable/bin/omni-inlet" "$bundle/Contents/MacOS/bin/omni-inlet"
           cp "$portable/bin/capture-agent" "$bundle/Contents/MacOS/bin/capture-agent"
           cp "$portable/bin/window-enumerator" "$bundle/Contents/MacOS/bin/window-enumerator"
+          mkdir -p "$bundle/Contents/Frameworks"
+          xcrun swift-stdlib-tool --copy \
+            --scan-executable "$bundle/Contents/MacOS/omni-inlet" \
+            --scan-executable "$bundle/Contents/MacOS/bin/omni-inlet" \
+            --scan-executable "$bundle/Contents/MacOS/bin/capture-agent" \
+            --scan-executable "$bundle/Contents/MacOS/bin/window-enumerator" \
+            --destination "$bundle/Contents/Frameworks" \
+            --platform macosx
+          find "$bundle/Contents/Frameworks" -type f -name '*.dylib' -exec codesign --force --sign - {} \;
           codesign --force --sign - "$bundle/Contents/MacOS/bin/omni-inlet"
           codesign --force --sign - "$bundle/Contents/MacOS/bin/capture-agent"
           codesign --force --sign - "$bundle/Contents/MacOS/bin/window-enumerator"
-          codesign --force --deep --sign - "$bundle"
+          codesign --force --sign - "$bundle"
+          codesign --verify --deep --strict --verbose=2 "$bundle"
           rm -rf "$portable/bin" "$portable/lib" "$portable/resources"
           cp -R "$bundle" "$portable/OmniInlet.app"
 

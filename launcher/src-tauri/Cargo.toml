@@ -17,7 +17,6 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 anyhow = "1.0"
-capture-agent = { path = "../../capture-agent/crates/capture-worker" }
 capture-protocol = { path = "../../capture-agent/crates/capture-protocol" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 serde = { version = "1.0", features = ["derive"] }

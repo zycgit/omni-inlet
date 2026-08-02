@@ -8,7 +8,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use capture_protocol::{AgentLease, NativeTarget, WindowCandidate};
+use capture_protocol::{
+    AgentLease, NativeTarget, WindowCandidate, active_agent_leases, agents_directory,
+};
 use chrono::Local;
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -57,7 +59,7 @@ pub fn enumerate_windows(app: AppHandle) -> Result<Vec<WindowCandidate>, String>
 
 #[tauri::command]
 pub fn list_agents() -> Result<Vec<AgentLease>, String> {
-    capture_agent::registry::active_leases(unix_ms()).map_err(error_string)
+    active_agent_leases(unix_ms()).map_err(error_string)
 }
 
 #[tauri::command]
@@ -221,7 +223,7 @@ fn resolve_program(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
 }
 
 fn runtime_directory() -> anyhow::Result<PathBuf> {
-    Ok(capture_agent::registry::agents_directory()?
+    Ok(agents_directory()?
         .parent()
         .expect("agents directory always has a parent")
         .to_path_buf())

@@ -1,6 +1,63 @@
+use std::{env, fs, io, path::PathBuf};
+
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_VERSION: u32 = 1;
+pub const AGENT_LEASE_STALE_AFTER_MS: u64 = 6_000;
+
+pub fn agents_directory() -> io::Result<PathBuf> {
+    let base = if cfg!(target_os = "windows") {
+        env::var_os("LOCALAPPDATA").map(PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join("Library/Application Support"))
+    } else {
+        env::var_os("XDG_RUNTIME_DIR")
+            .or_else(|| env::var_os("XDG_CACHE_HOME"))
+            .map(PathBuf::from)
+            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+    }
+    .ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "cannot resolve the current user's runtime directory",
+        )
+    })?;
+    Ok(base
+        .join(if cfg!(target_os = "linux") {
+            "omni-inlet"
+        } else {
+            "OmniInlet"
+        })
+        .join("runtime/agents"))
+}
+
+pub fn active_agent_leases(now_ms: u64) -> io::Result<Vec<AgentLease>> {
+    let directory = agents_directory()?;
+    if !directory.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut leases = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        let path = entry?.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(_) => continue,
+        };
+        let lease: AgentLease = match serde_json::from_slice(&bytes) {
+            Ok(lease) => lease,
+            Err(_) => continue,
+        };
+        if now_ms.saturating_sub(lease.heartbeat_at_unix_ms) <= AGENT_LEASE_STALE_AFTER_MS {
+            leases.push(lease);
+        }
+    }
+    Ok(leases)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
