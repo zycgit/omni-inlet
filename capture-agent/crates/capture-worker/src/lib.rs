@@ -1,3 +1,5 @@
+pub mod platform;
+pub mod registry;
 pub mod runner;
 pub mod source;
 pub mod test_pattern;

@@ -7,7 +7,17 @@ pub struct CapturedFrame {
     pub rgba: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceState {
+    Available,
+    Hidden,
+    Destroyed,
+}
+
 pub trait CaptureSource {
     fn info(&self) -> CaptureSourceInfo;
     fn capture(&mut self) -> Result<CapturedFrame>;
+    fn state(&self) -> Result<SourceState> {
+        Ok(SourceState::Available)
+    }
 }

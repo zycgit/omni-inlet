@@ -14,11 +14,14 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use capture_protocol::{
-    CaptureConfiguration, CaptureEvent, CaptureJobEvents, CaptureJobMeta, PROTOCOL_VERSION,
-    VideoEncodingConfiguration,
+    AgentState, CaptureConfiguration, CaptureEvent, CaptureJobEvents, CaptureJobMeta, NativeTarget,
+    PROTOCOL_VERSION, VideoEncodingConfiguration,
 };
 
-use crate::source::{CaptureSource, CapturedFrame};
+use crate::{
+    registry::LeaseGuard,
+    source::{CaptureSource, CapturedFrame, SourceState},
+};
 
 const META_FILE: &str = "meta.json";
 const EVENTS_FILE: &str = "events.json";
@@ -42,6 +45,17 @@ pub struct CaptureSummary {
     pub frames: u64,
 }
 
+#[derive(Debug)]
+pub struct SourceLostError;
+
+impl std::fmt::Display for SourceLostError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("the native capture target no longer exists")
+    }
+}
+
+impl std::error::Error for SourceLostError {}
+
 pub fn run_capture(
     source: &mut dyn CaptureSource,
     options: &CaptureOptions,
@@ -54,6 +68,24 @@ pub fn run_capture(
     fs::create_dir_all(&videos_directory)?;
 
     let source_info = source.info();
+    let target = NativeTarget {
+        kind: source_info.kind.target_kind().to_string(),
+        value: source_info.id.clone(),
+    };
+    let agent_id = format!("{}-{}", options.job_id, std::process::id());
+    let mut lease = LeaseGuard::create(
+        agent_id.clone(),
+        options.job_id.clone(),
+        target,
+        &options.output_directory,
+    )?;
+    lease.update(AgentState::Capturing, 0, 0)?;
+    emit_runtime_event(serde_json::json!({
+        "event": "agent_started",
+        "agentId": agent_id,
+        "jobId": options.job_id,
+        "pid": std::process::id()
+    }));
     let encoded_width = even_dimension(source_info.width)?;
     let encoded_height = even_dimension(source_info.height)?;
     let key_frame_interval_frames = options
@@ -131,6 +163,8 @@ pub fn run_capture(
     let mut segments_written = 0_u64;
     let mut frames_written = 0_u64;
     let frame_interval = Duration::from_secs_f64(1.0 / f64::from(options.fps));
+    let capture_started = Instant::now();
+    let mut last_heartbeat = Instant::now();
 
     loop {
         if options.stop_requested.load(Ordering::Relaxed)
@@ -180,6 +214,21 @@ pub fn run_capture(
                 }
             }
 
+            if last_heartbeat.elapsed() >= Duration::from_secs(2) {
+                lease.update(
+                    AgentState::Capturing,
+                    segments_written,
+                    capture_started.elapsed().as_millis() as u64,
+                )?;
+                emit_runtime_event(serde_json::json!({
+                    "event": "heartbeat",
+                    "agentId": agent_id,
+                    "segments": segments_written,
+                    "recordedDurationMs": capture_started.elapsed().as_millis() as u64
+                }));
+                last_heartbeat = Instant::now();
+            }
+
             next_frame_at += frame_interval;
             if let Some(delay) = next_frame_at.checked_duration_since(Instant::now()) {
                 thread::sleep(delay);
@@ -192,8 +241,29 @@ pub fn run_capture(
             encoder.abort()?;
             remove_file_if_exists(&temporary_path)?;
             if let Some(error) = capture_error {
-                record_gap(&mut events, &events_path, &error.to_string())?;
-                return Err(error).context("capture source failed");
+                match source.state()? {
+                    SourceState::Hidden => {
+                        wait_for_source(
+                            source,
+                            options,
+                            &mut lease,
+                            &agent_id,
+                            &mut events,
+                            &events_path,
+                            segments_written,
+                            capture_started,
+                        )?;
+                        continue;
+                    }
+                    SourceState::Destroyed => {
+                        record_source_lost(&mut events, &events_path, &agent_id)?;
+                        return Err(SourceLostError.into());
+                    }
+                    SourceState::Available => {
+                        record_gap(&mut events, &events_path, &error.to_string())?;
+                        return Err(error).context("capture source failed while target is alive");
+                    }
+                }
             }
             break;
         }
@@ -214,11 +284,41 @@ pub fn run_capture(
         });
         write_json_atomic(&events_path, &events)?;
         segments_written += 1;
+        lease.update(
+            AgentState::Capturing,
+            segments_written,
+            capture_started.elapsed().as_millis() as u64,
+        )?;
+        emit_runtime_event(serde_json::json!({
+            "event": "video_segment_completed",
+            "agentId": agent_id,
+            "sequence": segment_sequence,
+            "path": final_path,
+            "segments": segments_written
+        }));
         segment_sequence += 1;
 
         if let Some(error) = capture_error {
-            record_gap(&mut events, &events_path, &error.to_string())?;
-            return Err(error).context("capture source failed");
+            match source.state()? {
+                SourceState::Hidden => wait_for_source(
+                    source,
+                    options,
+                    &mut lease,
+                    &agent_id,
+                    &mut events,
+                    &events_path,
+                    segments_written,
+                    capture_started,
+                )?,
+                SourceState::Destroyed => {
+                    record_source_lost(&mut events, &events_path, &agent_id)?;
+                    return Err(SourceLostError.into());
+                }
+                SourceState::Available => {
+                    record_gap(&mut events, &events_path, &error.to_string())?;
+                    return Err(error).context("capture source failed while target is alive");
+                }
+            }
         }
     }
 
@@ -228,12 +328,101 @@ pub fn run_capture(
         frames: frames_written,
     });
     write_json_atomic(&events_path, &events)?;
+    emit_runtime_event(serde_json::json!({
+        "event": "capture_stopped",
+        "agentId": agent_id,
+        "segments": segments_written,
+        "frames": frames_written
+    }));
 
     Ok(CaptureSummary {
         job_directory: options.output_directory.clone(),
         segments: segments_written,
         frames: frames_written,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn wait_for_source(
+    source: &dyn CaptureSource,
+    options: &CaptureOptions,
+    lease: &mut LeaseGuard,
+    agent_id: &str,
+    events: &mut CaptureJobEvents,
+    events_path: &Path,
+    segments: u64,
+    capture_started: Instant,
+) -> Result<()> {
+    events.push(CaptureEvent::CaptureSuspended {
+        reason: "window_hidden".to_string(),
+        occurred_at_unix_ms: unix_ms(),
+    });
+    write_json_atomic(events_path, events)?;
+    lease.update(
+        AgentState::Suspended,
+        segments,
+        capture_started.elapsed().as_millis() as u64,
+    )?;
+    emit_runtime_event(serde_json::json!({
+        "event": "capture_suspended",
+        "agentId": agent_id,
+        "reason": "window_hidden"
+    }));
+
+    loop {
+        if options.stop_requested.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_secs(2));
+        match source.state()? {
+            SourceState::Available => {
+                events.push(CaptureEvent::CaptureResumed {
+                    occurred_at_unix_ms: unix_ms(),
+                });
+                write_json_atomic(events_path, events)?;
+                lease.update(
+                    AgentState::Capturing,
+                    segments,
+                    capture_started.elapsed().as_millis() as u64,
+                )?;
+                emit_runtime_event(serde_json::json!({
+                    "event": "capture_resumed",
+                    "agentId": agent_id
+                }));
+                return Ok(());
+            }
+            SourceState::Hidden => lease.update(
+                AgentState::Suspended,
+                segments,
+                capture_started.elapsed().as_millis() as u64,
+            )?,
+            SourceState::Destroyed => {
+                record_source_lost(events, events_path, agent_id)?;
+                return Err(SourceLostError.into());
+            }
+        }
+    }
+}
+
+fn record_source_lost(
+    events: &mut CaptureJobEvents,
+    events_path: &Path,
+    agent_id: &str,
+) -> Result<()> {
+    events.push(CaptureEvent::SourceLost {
+        occurred_at_unix_ms: unix_ms(),
+    });
+    write_json_atomic(events_path, events)?;
+    emit_runtime_event(serde_json::json!({
+        "event": "source_lost",
+        "agentId": agent_id
+    }));
+    Ok(())
+}
+
+fn emit_runtime_event(value: serde_json::Value) {
+    println!("{value}");
+    let _ = std::io::stdout().flush();
 }
 
 fn validate_options(options: &CaptureOptions) -> Result<()> {

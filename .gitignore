@@ -2,3 +2,6 @@ target/
 dist/
 capture-data/
 *.tmp
+node_modules/
+launcher/dist/
+launcher/src-tauri/target/

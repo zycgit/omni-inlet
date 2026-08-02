@@ -8,13 +8,20 @@ use x11rb::{
     rust_connection::RustConnection,
 };
 
-use crate::source::{CaptureSource, CapturedFrame};
+use crate::source::{CaptureSource, CapturedFrame, SourceState};
 
 #[derive(Clone, Copy)]
 struct Atoms {
     net_client_list: Atom,
     net_wm_name: Atom,
+    net_wm_pid: Atom,
     utf8_string: Atom,
+}
+
+pub struct X11WindowInfo {
+    pub source: CaptureSourceInfo,
+    pub application_name: String,
+    pub process_id: Option<u32>,
 }
 
 pub struct X11WindowSource {
@@ -132,9 +139,31 @@ impl CaptureSource for X11WindowSource {
             rgba,
         })
     }
+
+    fn state(&self) -> Result<SourceState> {
+        let attributes = match self.connection.get_window_attributes(self.window) {
+            Ok(cookie) => match cookie.reply() {
+                Ok(attributes) => attributes,
+                Err(_) => return Ok(SourceState::Destroyed),
+            },
+            Err(_) => return Ok(SourceState::Destroyed),
+        };
+        Ok(if attributes.map_state == MapState::VIEWABLE {
+            SourceState::Available
+        } else {
+            SourceState::Hidden
+        })
+    }
 }
 
 pub fn list_windows() -> Result<Vec<CaptureSourceInfo>> {
+    Ok(list_window_details()?
+        .into_iter()
+        .map(|window| window.source)
+        .collect())
+}
+
+pub fn list_window_details() -> Result<Vec<X11WindowInfo>> {
     let (connection, screen_number) =
         RustConnection::connect(None).context("cannot connect to the X11 display")?;
     let screen = connection
@@ -174,16 +203,25 @@ pub fn list_windows() -> Result<Vec<CaptureSourceInfo>> {
         if title.trim().is_empty() {
             continue;
         }
-        result.push(CaptureSourceInfo {
-            kind: CaptureSourceKind::X11Window,
-            id: format!("0x{window:x}"),
-            title,
-            width: geometry.width.into(),
-            height: geometry.height.into(),
-            visible: attributes.map_state == MapState::VIEWABLE,
+        result.push(X11WindowInfo {
+            source: CaptureSourceInfo {
+                kind: CaptureSourceKind::X11Window,
+                id: format!("0x{window:x}"),
+                title,
+                width: geometry.width.into(),
+                height: geometry.height.into(),
+                visible: attributes.map_state == MapState::VIEWABLE,
+            },
+            application_name: window_class(&connection, window)
+                .unwrap_or_else(|_| "X11 应用".to_string()),
+            process_id: window_pid(&connection, window, atoms).ok(),
         });
     }
-    result.sort_by(|left, right| left.title.cmp(&right.title));
+    result.sort_by(|left, right| {
+        left.application_name
+            .cmp(&right.application_name)
+            .then(left.source.title.cmp(&right.source.title))
+    });
     Ok(result)
 }
 
@@ -207,8 +245,41 @@ fn intern_atoms(connection: &RustConnection) -> Result<Atoms> {
             .intern_atom(false, b"_NET_WM_NAME")?
             .reply()?
             .atom,
+        net_wm_pid: connection.intern_atom(false, b"_NET_WM_PID")?.reply()?.atom,
         utf8_string: connection.intern_atom(false, b"UTF8_STRING")?.reply()?.atom,
     })
+}
+
+fn window_class(connection: &RustConnection, window: Window) -> Result<String> {
+    let reply = connection
+        .get_property(
+            false,
+            window,
+            AtomEnum::WM_CLASS,
+            AtomEnum::STRING,
+            0,
+            u32::MAX,
+        )?
+        .reply()?;
+    let names = reply
+        .value
+        .split(|byte| *byte == 0)
+        .filter(|value| !value.is_empty())
+        .map(String::from_utf8_lossy)
+        .collect::<Vec<_>>();
+    names
+        .last()
+        .map(|value| value.to_string())
+        .context("WM_CLASS is empty")
+}
+
+fn window_pid(connection: &RustConnection, window: Window, atoms: Atoms) -> Result<u32> {
+    connection
+        .get_property(false, window, atoms.net_wm_pid, AtomEnum::CARDINAL, 0, 1)?
+        .reply()?
+        .value32()
+        .and_then(|mut values| values.next())
+        .context("_NET_WM_PID is unavailable")
 }
 
 fn client_windows(connection: &RustConnection, root: Window, atoms: Atoms) -> Result<Vec<Window>> {

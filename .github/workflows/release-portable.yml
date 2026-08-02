@@ -2,13 +2,16 @@ name: Build portable apps
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
+  pull_request:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag, for example v0.1.0"
-        required: true
+        description: "Optional release tag, for example v0.2.0"
+        required: false
         type: string
 
 permissions:
@@ -43,6 +46,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install Linux desktop build dependencies
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            libdbus-1-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            pkg-config \
+            wget
+
+      - name: Select Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: launcher/package-lock.json
+
       - name: Select stable Rust
         run: rustup default stable
 
@@ -52,11 +79,72 @@ jobs:
       - name: Build portable app
         run: cargo xtask package --target current
 
+      - name: Install launcher dependencies
+        working-directory: launcher
+        run: npm ci
+
+      - name: Build launcher frontend
+        working-directory: launcher
+        run: npm run build
+
+      - name: Build Tauri launcher on Linux and Windows
+        if: runner.os != 'macOS'
+        working-directory: launcher
+        run: npm run tauri build -- --no-bundle
+
+      - name: Build macOS application bundle
+        if: runner.os == 'macOS'
+        working-directory: launcher
+        run: npm run tauri build -- --bundles app
+
+      - name: Add launcher to portable app on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        working-directory: .
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          cp launcher/src-tauri/target/release/omni-inlet \
+            "capture-agent/dist/0.2.0/${TARGET}/app/omni-inlet"
+
+      - name: Assemble and sign macOS application bundle
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: .
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          portable="capture-agent/dist/0.2.0/${TARGET}/app"
+          bundle="launcher/src-tauri/target/release/bundle/macos/OmniInlet.app"
+          mkdir -p "$bundle/Contents/MacOS/bin"
+          cp "$portable/bin/omni-inlet" "$bundle/Contents/MacOS/bin/omni-inlet"
+          cp "$portable/bin/capture-agent" "$bundle/Contents/MacOS/bin/capture-agent"
+          cp "$portable/bin/window-enumerator" "$bundle/Contents/MacOS/bin/window-enumerator"
+          codesign --force --sign - "$bundle/Contents/MacOS/bin/omni-inlet"
+          codesign --force --sign - "$bundle/Contents/MacOS/bin/capture-agent"
+          codesign --force --sign - "$bundle/Contents/MacOS/bin/window-enumerator"
+          codesign --force --deep --sign - "$bundle"
+          rm -rf "$portable/bin" "$portable/lib" "$portable/resources"
+          cp -R "$bundle" "$portable/OmniInlet.app"
+
+      - name: Add launcher to portable app on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: .
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          Copy-Item `
+            "launcher/src-tauri/target/release/omni-inlet.exe" `
+            "capture-agent/dist/0.2.0/$env:TARGET/app/omni-inlet.exe"
+
       - name: Create ZIP on Linux
         if: runner.os == 'Linux'
         shell: bash
         env:
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || '' }}
           PLATFORM: ${{ matrix.platform }}
           ARCH: ${{ matrix.arch }}
           TARGET: ${{ matrix.target }}
@@ -65,8 +153,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes zip
           mkdir -p "$GITHUB_WORKSPACE/release"
-          archive="omni-inlet-${RELEASE_TAG}-${PLATFORM}-${ARCH}.zip"
-          version="${RELEASE_TAG#v}"
+          label="${RELEASE_TAG:-ci-${GITHUB_SHA:0:8}}"
+          archive="omni-inlet-${label}-${PLATFORM}-${ARCH}.zip"
+          version="0.2.0"
           cd "dist/${version}/${TARGET}"
           zip -r "$GITHUB_WORKSPACE/release/$archive" app
 
@@ -74,15 +163,16 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         env:
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || '' }}
           PLATFORM: ${{ matrix.platform }}
           ARCH: ${{ matrix.arch }}
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/release"
-          archive="omni-inlet-${RELEASE_TAG}-${PLATFORM}-${ARCH}.zip"
-          version="${RELEASE_TAG#v}"
+          label="${RELEASE_TAG:-ci-${GITHUB_SHA:0:8}}"
+          archive="omni-inlet-${label}-${PLATFORM}-${ARCH}.zip"
+          version="0.2.0"
           cd "dist/${version}/${TARGET}"
           ditto -c -k --keepParent app "$GITHUB_WORKSPACE/release/$archive"
 
@@ -90,15 +180,16 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || '' }}
           PLATFORM: ${{ matrix.platform }}
           ARCH: ${{ matrix.arch }}
           TARGET: ${{ matrix.target }}
         run: |
           $releaseDirectory = Join-Path $env:GITHUB_WORKSPACE "release"
           New-Item -ItemType Directory -Force -Path $releaseDirectory | Out-Null
-          $archive = "omni-inlet-$env:RELEASE_TAG-$env:PLATFORM-$env:ARCH.zip"
-          $version = $env:RELEASE_TAG.TrimStart("v")
+          $label = if ($env:RELEASE_TAG) { $env:RELEASE_TAG } else { "ci-$($env:GITHUB_SHA.Substring(0, 8))" }
+          $archive = "omni-inlet-$label-$env:PLATFORM-$env:ARCH.zip"
+          $version = "0.2.0"
           $appDirectory = Join-Path (Get-Location) "dist/$version/$env:TARGET/app"
           Compress-Archive -Path $appDirectory -DestinationPath (Join-Path $releaseDirectory $archive)
 
@@ -113,6 +204,7 @@ jobs:
   release:
     name: Upload GitHub Release attachments
     needs: build
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}

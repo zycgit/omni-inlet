@@ -1,5 +1,7 @@
 use anyhow::Result;
-use capture_protocol::{CaptureSourceInfo, CaptureSourceKind};
+use std::path::PathBuf;
+
+use capture_protocol::{ApplicationInfo, NativeTarget, WindowCandidate};
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
@@ -19,8 +21,10 @@ enum Command {
     Doctor,
     /// Print one window snapshot.
     Snapshot {
-        #[arg(long, value_enum, default_value_t = SourceArg::X11)]
+        #[arg(long, value_enum, default_value_t = SourceArg::Native)]
         source: SourceArg,
+        #[arg(long)]
+        thumbnail_dir: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -28,8 +32,8 @@ enum Command {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum SourceArg {
+    Native,
     TestPattern,
-    X11,
 }
 
 fn main() {
@@ -42,34 +46,50 @@ fn main() {
 fn run() -> Result<()> {
     match Cli::parse().command {
         Command::Doctor => {
-            let status = match list_x11_windows() {
+            let status = match capture_agent::platform::enumerate_windows(None) {
                 Ok(windows) => serde_json::json!({
                     "platform": std::env::consts::OS,
-                    "x11": {"available": true, "windowCount": windows.len()}
+                    "native": {"available": true, "windowCount": windows.len()}
                 }),
                 Err(error) => serde_json::json!({
                     "platform": std::env::consts::OS,
-                    "x11": {"available": false, "error": error.to_string()}
+                    "native": {"available": false, "error": error.to_string()}
                 }),
             };
             println!("{}", serde_json::to_string_pretty(&status)?);
             Ok(())
         }
-        Command::Snapshot { source, json } => list(source, json),
+        Command::Snapshot {
+            source,
+            thumbnail_dir,
+            json,
+        } => list(source, thumbnail_dir, json),
     }
 }
 
-fn list(source: SourceArg, json: bool) -> Result<()> {
-    let sources: Vec<CaptureSourceInfo> = match source {
-        SourceArg::TestPattern => vec![CaptureSourceInfo {
-            kind: CaptureSourceKind::TestPattern,
-            id: "test-pattern".to_string(),
+fn list(source: SourceArg, thumbnail_dir: Option<PathBuf>, json: bool) -> Result<()> {
+    let sources: Vec<WindowCandidate> = match source {
+        SourceArg::TestPattern => vec![WindowCandidate {
+            candidate_id: "test-pattern:test-pattern".to_string(),
+            application: ApplicationInfo {
+                group_id: "test:omni-inlet".to_string(),
+                display_name: "OmniInlet 测试源".to_string(),
+                process_id: Some(std::process::id()),
+                icon_path: None,
+            },
             title: "Deterministic test pattern".to_string(),
+            visible: true,
+            capturable: true,
+            unavailable_reason: None,
+            thumbnail_path: None,
             width: 1280,
             height: 720,
-            visible: true,
+            native_target: NativeTarget {
+                kind: "test-pattern".to_string(),
+                value: "test-pattern".to_string(),
+            },
         }],
-        SourceArg::X11 => list_x11_windows()?,
+        SourceArg::Native => capture_agent::platform::enumerate_windows(thumbnail_dir.as_deref())?,
     };
     if json {
         println!("{}", serde_json::to_string_pretty(&sources)?);
@@ -77,7 +97,7 @@ fn list(source: SourceArg, json: bool) -> Result<()> {
         for source in sources {
             println!(
                 "{}\t{}x{}\t{}\t{}",
-                source.id,
+                source.native_target.value,
                 source.width,
                 source.height,
                 if source.visible { "visible" } else { "hidden" },
@@ -86,14 +106,4 @@ fn list(source: SourceArg, json: bool) -> Result<()> {
         }
     }
     Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn list_x11_windows() -> Result<Vec<CaptureSourceInfo>> {
-    capture_agent::x11::list_windows()
-}
-
-#[cfg(not(target_os = "linux"))]
-fn list_x11_windows() -> Result<Vec<CaptureSourceInfo>> {
-    anyhow::bail!("the X11 window enumerator is only available on Linux")
 }

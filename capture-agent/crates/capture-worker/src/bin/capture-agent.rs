@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use capture_agent::{
-    runner::{CaptureOptions, run_capture},
+    runner::{CaptureOptions, SourceLostError, run_capture},
     source::CaptureSource,
     test_pattern::TestPatternSource,
 };
@@ -34,7 +34,9 @@ enum Command {
     /// Capture one source into H.264/MKV video segments.
     Run {
         #[arg(long, value_enum)]
-        source: SourceArg,
+        source: Option<SourceArg>,
+        #[arg(long)]
+        target_kind: Option<String>,
         #[arg(long)]
         window_id: Option<String>,
         /// Exact job output directory. Its final component is the default job id.
@@ -69,7 +71,17 @@ enum SourceArg {
 fn main() {
     if let Err(error) = run() {
         eprintln!("capture-agent: {error:#}");
-        std::process::exit(1);
+        let code = if error.downcast_ref::<SourceLostError>().is_some() {
+            20
+        } else if error.to_string().contains("required")
+            || error.to_string().contains("must be greater")
+            || error.to_string().contains("invalid")
+        {
+            2
+        } else {
+            70
+        };
+        std::process::exit(code);
     }
 }
 
@@ -78,6 +90,7 @@ fn run() -> Result<()> {
         Command::Doctor => doctor(),
         Command::Run {
             source,
+            target_kind,
             window_id,
             output,
             job_id,
@@ -92,12 +105,24 @@ fn run() -> Result<()> {
             if segment_seconds == 0 {
                 bail!("--segment-seconds must be greater than zero");
             }
+            if source.is_some() && target_kind.is_some() {
+                bail!("--source and --target-kind cannot be used together");
+            }
             let mut capture_source: Box<dyn CaptureSource> = match source {
-                SourceArg::TestPattern => Box::new(TestPatternSource::new(test_width, test_height)),
-                SourceArg::X11 => {
+                Some(SourceArg::TestPattern) => {
+                    Box::new(TestPatternSource::new(test_width, test_height))
+                }
+                Some(SourceArg::X11) => {
                     let window_id =
                         window_id.context("--window-id is required for --source x11")?;
                     x11_source(&window_id)?
+                }
+                None => {
+                    let target_kind = target_kind.context(
+                        "--target-kind is required unless --source test-pattern is used",
+                    )?;
+                    let window_id = window_id.context("--window-id is required")?;
+                    capture_agent::platform::open_window_source(&target_kind, &window_id)?
                 }
             };
             let stop_requested = Arc::new(AtomicBool::new(false));

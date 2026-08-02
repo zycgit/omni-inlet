@@ -7,6 +7,82 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub enum CaptureSourceKind {
     TestPattern,
     X11Window,
+    WindowsWindow,
+    MacosWindow,
+}
+
+impl CaptureSourceKind {
+    pub fn target_kind(&self) -> &'static str {
+        match self {
+            Self::TestPattern => "test-pattern",
+            Self::X11Window => "x11-window",
+            Self::WindowsWindow => "windows-hwnd",
+            Self::MacosWindow => "macos-cgwindow",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplicationInfo {
+    pub group_id: String,
+    pub display_name: String,
+    pub process_id: Option<u32>,
+    pub icon_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeTarget {
+    pub kind: String,
+    pub value: String,
+}
+
+impl NativeTarget {
+    pub fn key(&self) -> String {
+        format!("{}:{}", self.kind, self.value)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowCandidate {
+    pub candidate_id: String,
+    pub application: ApplicationInfo,
+    pub title: String,
+    pub visible: bool,
+    pub capturable: bool,
+    pub unavailable_reason: Option<String>,
+    pub thumbnail_path: Option<String>,
+    pub width: u32,
+    pub height: u32,
+    pub native_target: NativeTarget,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentState {
+    Starting,
+    Capturing,
+    Suspended,
+    Unresponsive,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentLease {
+    pub schema_version: u32,
+    pub agent_id: String,
+    pub job_id: String,
+    pub pid: u32,
+    pub target: NativeTarget,
+    pub target_key: String,
+    pub output_directory: String,
+    pub state: AgentState,
+    pub started_at_unix_ms: u64,
+    pub heartbeat_at_unix_ms: u64,
+    pub segments: u64,
+    pub recorded_duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -91,6 +167,22 @@ pub enum CaptureEvent {
     #[serde(rename = "capture.gap")]
     CaptureGap {
         reason: String,
+        #[serde(rename = "occurredAtUnixMs")]
+        occurred_at_unix_ms: u64,
+    },
+    #[serde(rename = "capture.suspended")]
+    CaptureSuspended {
+        reason: String,
+        #[serde(rename = "occurredAtUnixMs")]
+        occurred_at_unix_ms: u64,
+    },
+    #[serde(rename = "capture.resumed")]
+    CaptureResumed {
+        #[serde(rename = "occurredAtUnixMs")]
+        occurred_at_unix_ms: u64,
+    },
+    #[serde(rename = "source.lost")]
+    SourceLost {
         #[serde(rename = "occurredAtUnixMs")]
         occurred_at_unix_ms: u64,
     },
