@@ -475,6 +475,12 @@ fn ffmpeg_result(code: c_int, operation: &str) -> FfmpegResult<()> {
     Err(format!("{operation}: {detail} ({code})"))
 }
 
+#[cfg(not(target_os = "macos"))]
 const fn libc_errno_eagain() -> c_int {
     11
+}
+
+#[cfg(target_os = "macos")]
+const fn libc_errno_eagain() -> c_int {
+    35
 }
