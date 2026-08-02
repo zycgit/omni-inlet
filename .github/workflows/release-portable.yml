@@ -88,6 +88,8 @@ jobs:
           set -euo pipefail
           vcpkg_root="${VCPKG_INSTALLATION_ROOT:-/usr/local/share/vcpkg}"
           command -v vcpkg >/dev/null
+          git -C "$vcpkg_root" fetch --depth=1 origin \
+            39344dff01c5a5a0134caf2624cdd492f05d30ea
           echo "VCPKG_ROOT=$vcpkg_root" >> "$GITHUB_ENV"
           echo "OMNI_VCPKG_ROOT=$vcpkg_root" >> "$GITHUB_ENV"
 
