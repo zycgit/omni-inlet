@@ -196,10 +196,15 @@ fn build_runtime_and_shells(root: &Path, target: &str, release: bool) -> Result<
         arguments.push("--release");
         arguments.extend(["--target", target]);
     }
-    let status = Command::new(cargo_program)
+    let mut command = Command::new(cargo_program);
+    command
         .args(arguments)
         .env("VCPKGRS_TRIPLET", triplet)
-        .current_dir(root)
+        .current_dir(root);
+    if target.contains("windows") {
+        command.env("VCPKGRS_DYNAMIC", "1");
+    }
+    let status = command
         .status()
         .context("cannot build the capture runtime and command shells")?;
     if !status.success() {

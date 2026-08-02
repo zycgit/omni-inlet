@@ -123,8 +123,9 @@ jobs:
         working-directory: .
         run: |
           set -euo pipefail
-          swift_runtime="$(dirname "$(xcrun --find swift)")/../lib/swift/macosx"
-          test -f "$swift_runtime/libswift_Concurrency.dylib"
+          swift_runtime="$(xcrun swift -print-target-info | python3 -c \
+            'import json, sys; print(":".join(json.load(sys.stdin)["paths"]["runtimeLibraryPaths"]))')"
+          test -n "$swift_runtime"
           echo "DYLD_LIBRARY_PATH=$swift_runtime" >> "$GITHUB_ENV"
 
       - name: Test workspace
