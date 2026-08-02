@@ -60,8 +60,8 @@ cargo xtask package --target current
 ```text
 dist/{version}/{target}/
 └── app/
-    ├── omni-inlet
     ├── bin/
+    │   ├── omni-inlet
     │   ├── capture-agent
     │   └── window-enumerator
     ├── lib/

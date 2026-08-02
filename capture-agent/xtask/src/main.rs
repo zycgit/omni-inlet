@@ -182,13 +182,7 @@ fn package(root: &Path, requested: TargetArg) -> Result<()> {
     } else {
         ""
     };
-    copy_binary(
-        root,
-        &target,
-        &format!("omni-inlet{extension}"),
-        &app_directory,
-    )?;
-    for binary in ["capture-agent", "window-enumerator"] {
+    for binary in ["omni-inlet", "capture-agent", "window-enumerator"] {
         copy_binary(
             root,
             &target,

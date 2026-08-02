@@ -608,7 +608,7 @@ omni-inlet/
 `omni-inlet` 根目录只统一管理 Git 和产品文档，不建立根 Cargo workspace。`launcher` 和 `capture-agent` 是两个清晰的构建边界：
 
 - `launcher` 拥有 Tauri/Vue 界面、监督器和最终桌面安装包。
-- `capture-agent` 一个 package 产生 `capture-agent`、`window-enumerator` 两个子程序；在 Tauri 引导器落地前，同时提供可用的命令行 `omni-inlet` 根入口。
+- `capture-agent` 一个 package 产生 `capture-agent`、`window-enumerator` 两个子程序，并提供捕获命令总入口 `omni-inlet`；三个程序都安装到 `app/bin/`。
 - `launcher/src-tauri` 可以通过 path dependency 使用 `capture-agent` library 暴露的协议和租约读取接口，但 `capture-agent` 不反向依赖 launcher。
 - 现有 `capture-agent` Rust workspace 保留，不再提升到产品根目录。
 
@@ -628,8 +628,9 @@ cargo xtask package --target current
 
 ```text
 dist/<version>/<target>/app/
-├── omni-inlet
+├── omni-inlet                 # launcher 生成的 GUI 入口
 ├── bin/
+│   ├── omni-inlet             # 捕获命令总入口
 │   ├── capture-agent
 │   └── window-enumerator
 ├── lib/
@@ -639,7 +640,7 @@ dist/<version>/<target>/app/
 
 根目录只有一个用户入口；产品子程序只放在 `bin/`；运行依赖放在 `lib/`。`lib/` 内部是否二次分目录，由后续具体依赖决定。安装器、ZIP、DMG 和 AppImage 只能重新封装或复制这个 `app/`，不再发明第二套目录。
 
-未来 Tauri/Vue 引导器替换根目录的 `omni-inlet` 命令行入口时，不改变此绿色目录协议。
+`capture-agent/cargo xtask package` 只负责准备 `app/bin/` 下的三个捕获程序；产品级打包由 Tauri/Vue 引导器在根目录写入 GUI `omni-inlet`，再封装完整 `app/`。
 
 发布包必须在目标系统完成最终验证：
 
@@ -695,7 +696,7 @@ dist/<version>/<target>/app/
 - 枚举器重启不影响采集器。
 - GUI 重启能从租约恢复任务和计数。
 - 每个 job 写入独占目录和可连续消费的 5 秒 MKV 视频分片。
-- `capture-agent/cargo xtask package --target current` 产生完整绿色 `app/` 目录，后续安装器只重新封装该目录。
+- `capture-agent/cargo xtask package --target current` 产生采集子系统的 `app/bin/` 内容；引导器构建补入根目录 GUI 后才形成完整绿色 `app/`。
 
 ## 20. 官方能力依据
 

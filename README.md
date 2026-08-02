@@ -13,7 +13,7 @@ OmniInlet（全域消息汇流平台）把来自不同聊天渠道的消息和�
 
 第一版先实现 `capture-agent/` 视觉采集子系统：
 
-- `omni-inlet`：绿色软件目录中的唯一入口。
+- `omni-inlet`：当前捕获命令总入口，随采集子程序安装到 `app/bin/`。
 - `capture-agent`：接收窗口 ID、输出目录和采集配置的无界面采集进程。
 - `window-enumerator`：枚举应用窗口并生成窗口快照信息。
 - `cargo xtask`：测试、构建和绿色目录打包的统一开发入口。
@@ -34,14 +34,16 @@ cargo xtask package --target current
 
 ```text
 capture-agent/dist/<version>/<target>/app/
-├── omni-inlet
 ├── bin/
+│   ├── omni-inlet
 │   ├── capture-agent
 │   └── window-enumerator
 ├── lib/
 ├── resources/
 └── licenses/
 ```
+
+完整桌面版本将由 `launcher/` 生成根目录的 `app/omni-inlet` 图形界面入口。根入口与 `bin/omni-inlet` 可以同名：前者负责 GUI 交互和进程监督，后者负责捕获命令调用。
 
 GitHub Actions 在版本标签推送后，分别在 Linux、Windows 和 macOS 原生运行器上构建 ZIP，并上传到对应 GitHub Release。
 

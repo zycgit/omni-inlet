@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "omni-inlet",
     version,
-    about = "OmniInlet portable application entrypoint"
+    about = "OmniInlet capture command entrypoint"
 )]
 struct Cli {
     #[command(subcommand)]
