@@ -47,9 +47,21 @@ capture-agent/dist/<version>/<target>/app/
 
 完整桌面版本将由 `launcher/` 生成根目录的 `app/omni-inlet` 图形界面入口。根入口与 `bin/omni-inlet` 可以同名：前者负责 GUI 交互和进程监督，后者负责捕获命令调用。`bin/capture-agent` 和 `bin/window-enumerator` 都是薄启动壳；窗口枚举、采集任务和视频编码等产品实现位于我们自己的 `lib/capture-runtime`，FFmpeg/OpenH264 是同目录下的第三方运行库。
 
-GitHub Actions 在版本标签推送后，分别在 Linux、Windows 和 macOS 原生运行器上构建 ZIP，并上传到对应 GitHub Release。
+GitHub Actions 在版本标签推送后，分别在 Linux、Windows 和 macOS 原生运行器上构建 ZIP，并上传到对应 GitHub Release。正式 Windows Release 会在压缩前通过 SignPath Foundation 对项目自有的 EXE 和 DLL 执行 Authenticode 签名，并验证所有签名；签名不可用时发布会直接失败，不会降级为未签名附件。普通 CI 构建物仍是未签名的开发预览包。
+
+## Code signing policy
+
+Free code signing is provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). 项目维护者角色、签名范围、验证方式和隐私边界见[代码签名策略](docs/code-signing-policy.md)。签名服务的一次性配置见 [SignPath 配置说明](docs/signpath-setup.md)。
+
+## 许可证与隐私
+
+OmniInlet 采用 [Apache License 2.0](LICENSE) 开源。当前版本只在用户明确选择后将窗口捕获结果写入本地目录，不主动向联网系统传输捕获内容；完整说明见[隐私策略](docs/privacy.md)。
+
+绿色软件不会写入系统级安装信息。卸载时先停止所有采集任务，再删除解压得到的 `app/` 目录；已经生成的捕获任务目录由操作者根据自己的保留策略单独删除。
 
 ## 文档
 
 - [技术架构](docs/technical-architecture.md)
 - [引导界面与运行架构](docs/launcher-ui-and-runtime-architecture.md)
+- [代码签名策略](docs/code-signing-policy.md)
+- [隐私策略](docs/privacy.md)

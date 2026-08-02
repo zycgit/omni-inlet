@@ -5,6 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+description = "OmniInlet native capture runtime"
+
+[package.metadata.winresource]
+ProductName = "OmniInlet"
+FileDescription = "OmniInlet native capture runtime"
+CompanyName = "OmniInlet contributors"
+LegalCopyright = "Copyright 2026 OmniInlet contributors"
 
 [lib]
 crate-type = ["cdylib"]
@@ -17,3 +24,6 @@ rusty_ffmpeg = { version = "0.17.0", features = [
     "link_vcpkg_ffmpeg",
     "use_prebuilt_binding",
 ] }
+
+[build-dependencies]
+winresource = "0.1.31"
